@@ -1,7 +1,10 @@
 data/*
 *.avi
 
-
 .venv
+*.err
+*.out
+
+__pycache__
 .env
 env 
