@@ -8,9 +8,9 @@ from qwen_vl_utils import process_vision_info
 from prompt_generator import generate_prompt
 
 # Configuration
-VIDEO_PATH = "./2018-03-07.10-55-00.11-00-00.bus.G508.r13.avi"
+VIDEO_PATH = "./2018-03-07.10-55-01.11-00-01.school.G421.r13.avi"
 NUM_FRAMES = 8  # Number of frames to extract from the video
-OUTPUT_FILE = "2018-03-07.10-55-00.11-00-00.bus.G508.r13.txt"
+OUTPUT_FILE = "2018-03-07.10-55-01.11-00-01.school.G421.r13.txt"
 
 # Load the Qwen model (using standard attention since FlashAttention2 is not installed)
 print("Loading model...")
@@ -225,12 +225,10 @@ def split_video_into_batches(video_path: str, batch_size: int = 10, frame_skip: 
     expected_batches = expected_frames // batch_size + (1 if expected_frames % batch_size > 0 else 0)
     
     return expected_batches, frame_generator()
-    
-video_path = "./demo.avi"
 
 # Process video in batches without loading everything into memory
 print("Processing video in batches, sampling 1 frame per second (1 out of 30 frames)...")
-total_batches, batch_generator = split_video_into_batches(video_path, batch_size=10, frame_skip=30)
+total_batches, batch_generator = split_video_into_batches(VIDEO_PATH, batch_size=10, frame_skip=30)
 
 # Process each batch individually
 history = ""
