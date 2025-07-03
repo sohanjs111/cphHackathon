@@ -5,11 +5,12 @@ from PIL import Image
 from typing import List
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
+from prompt_generator import generate_prompt
 
 # Configuration
-VIDEO_PATH = "./demo.avi"
+VIDEO_PATH = "./2018-03-07.10-55-00.11-00-00.bus.G508.r13.avi"
 NUM_FRAMES = 8  # Number of frames to extract from the video
-OUTPUT_FILE = "video_analysis_output.txt"
+OUTPUT_FILE = "2018-03-07.10-55-00.11-00-00.bus.G508.r13.txt"
 
 # Load the Qwen model (using standard attention since FlashAttention2 is not installed)
 print("Loading model...")
@@ -20,8 +21,8 @@ model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
 )
 
 # Configure the processor with optimized pixel settings
-min_pixels = 256*28*28
-max_pixels = 1280*28*28
+min_pixels = 256*28*28//3
+max_pixels = 1280*28*28//3
 processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-3B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
 
 def extract_frames(video_path, num_frames):
@@ -87,12 +88,20 @@ def analyze_video_frames(frames: List[Image.Image], backstory: str, last_batch: 
     Returns:
         Analysis text from the model
     """
-
-    system_prompt = "You are an expert surveillance video analyst tasked with analyzing short video clips, each consisting of 5 consecutive frames. "
+    # Calculate frame positions based on batch and sampling rate
+    num_frames = len(frames)
+    start_frame = (batch_count - 1) * num_frames * 30
+    end_frame = start_frame + (num_frames - 1) * 30
+    
+    # Generate appropriate prompt for this batch of frames
+    analysis_prompt = generate_prompt(start_frame, end_frame)
+    
+    # Add system prompt
+    system_prompt = "You are an expert surveillance video analyst. "
     if last_batch:
-        system_prompt += "This is the last batch of frames."
+        system_prompt += "This is the last batch of frames from the video."
     else:
-        system_prompt += "This is not the last batch of frames."
+        system_prompt += "This is batch #{} of frames from the video.".format(batch_count)
 
     # Build messages with multiple frames
     contents = []
@@ -107,7 +116,7 @@ def analyze_video_frames(frames: List[Image.Image], backstory: str, last_batch: 
     # Add the text prompt at the end
     contents.append({
         "type": "text", 
-        "text": backstory,
+        "text": analysis_prompt + ("\n\nPrevious analysis: " + backstory if backstory else ""),
     })
     
     messages = [{
@@ -151,63 +160,86 @@ def analyze_video_frames(frames: List[Image.Image], backstory: str, last_batch: 
 
 def split_video_into_batches(video_path: str, batch_size: int = 10, frame_skip: int = 30):
     """
-    Generator function to yield batches of frames from a video without loading everything into memory.
-    Samples 1 frame out of every frame_skip frames (default: 1 frame per second for 60fps video).
+    Function that returns a generator yielding batches of frames from a video without loading everything into memory
+    and the total number of expected batches.
+    
+    Samples 1 frame out of every frame_skip frames (default: 1 frame per second for 30fps video).
     
     Args:
         video_path: Path to the video file
         batch_size: Number of frames per batch
-        frame_skip: Number of frames to skip between each sampled frame (e.g., 30 means take 1 frame per second in 60fps video)
+        frame_skip: Number of frames to skip between each sampled frame (e.g., 30 means take 1 frame per second in 30fps video)
         
-    Yields:
-        List of frames (as PIL Images) for the current batch
+    Returns:
+        Tuple of (estimated_batch_count, frame_generator)
     """
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError(f"Не удалось открыть видео: {video_path}")
-    
-    current_batch = []
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_count = 0
-    frames_processed = 0
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-            
-        frame_count += 1
+    def frame_generator():
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {video_path}")
         
-        # Process only 1 frame per second (assuming 60fps)
-        if (frame_count - 1) % frame_skip == 0:
-            # Конвертируем BGR (OpenCV) в RGB (PIL)
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(frame_rgb)
+        current_batch = []
+        frame_count = 0
+        batch_count = 0
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                    
+                frame_count += 1
+                
+                # Process only 1 frame per frame_skip frames
+                if (frame_count - 1) % frame_skip == 0:
+                    # Convert BGR (OpenCV) to RGB (PIL)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(frame_rgb)
+                    
+                    current_batch.append(pil_image)
+                    
+                    if len(current_batch) == batch_size:
+                        batch_count += 1
+                        yield current_batch
+                        current_batch = []
             
-            current_batch.append(pil_image)
-            frames_processed += 1
-            
-            if len(current_batch) == batch_size:
+            # Yield any remaining frames in the last batch
+            if current_batch:
+                batch_count += 1
                 yield current_batch
-                current_batch = []
-            
+        finally:
+            # Release the video capture object
+            cap.release()
+    
+    # Calculate an estimate of how many batches we'll have
+    temp_cap = cv2.VideoCapture(video_path)
+    if not temp_cap.isOpened():
+        raise ValueError(f"Could not open video: {video_path}")
+    
+    total_frames = int(temp_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    temp_cap.release()
+    
+    # Calculate expected frames after skipping
+    expected_frames = total_frames // frame_skip + (1 if total_frames % frame_skip > 0 else 0)
+    # Calculate expected batches
+    expected_batches = expected_frames // batch_size + (1 if expected_frames % batch_size > 0 else 0)
+    
+    return expected_batches, frame_generator()
     
 video_path = "./demo.avi"
 
 # Process video in batches without loading everything into memory
 print("Processing video in batches, sampling 1 frame per second (1 out of 30 frames)...")
-batch_generator = split_video_into_batches(video_path, batch_size=10, frame_skip=30)
+total_batches, batch_generator = split_video_into_batches(video_path, batch_size=10, frame_skip=30)
 
-# Example: Process each batch individually
+# Process each batch individually
 history = ""
 batch_count = 0
 for batch in batch_generator:
     batch_count += 1
     print(f"Processing batch {batch_count} with {len(batch)} frames")
-
-    result = analyze_video_frames(batch, history)
-    print(result)
-    print(history)
+    
+    result = analyze_video_frames(batch, history, batch_count == total_batches)
     history += result[0]
     
     # Here you would do your processing with the batch
@@ -221,6 +253,9 @@ for batch in batch_generator:
     
 print(f"Finished processing {batch_count} batches")
 print(history)
+# Save the output to a file
+with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    f.write(history)
 
 # Main execution
 #print(f"Extracting {NUM_FRAMES} frames from {VIDEO_PATH}...")
