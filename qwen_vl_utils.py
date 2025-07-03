@@ -2,6 +2,8 @@ import base64
 import io
 from PIL import Image
 import numpy as np
+from typing import List
+import cv2
 
 def process_vision_info(messages):
     """
@@ -48,3 +50,4 @@ def process_vision_info(messages):
                     video_inputs.append(video_data)
     
     return image_inputs, video_inputs
+
