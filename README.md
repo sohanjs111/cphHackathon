@@ -4,5 +4,5 @@
 ### Members:
 - Nikita
 - Angeliki
-- Suhan
+- Sohan
 - Luis
